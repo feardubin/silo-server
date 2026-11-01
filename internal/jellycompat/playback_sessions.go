@@ -130,7 +130,7 @@ type PlaybackMediaSource struct {
 	// HLSRemux selects HLS with video copy. TranscodeAudio remains the
 	// independent audio-encode decision, so a compatible audio codec can stay
 	// bit-for-bit copied. HLSRemuxMPEGTS overrides the normal fMP4 packaging for
-	// clients whose Dolby Vision decoder requires MPEG-TS.
+	// clients whose decoder or device profile requires MPEG-TS.
 	HLSRemux       bool
 	HLSRemuxMPEGTS bool
 	// KeyframePlaylist records, for the life of the play session, that an

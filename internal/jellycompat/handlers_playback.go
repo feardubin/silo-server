@@ -1335,12 +1335,12 @@ func (h *PlaybackHandler) playbackRoutingPolicy() config.PlaybackRoutingPolicy {
 	return config.DefaultPlaybackRoutingPolicy()
 }
 
-// compatProgressiveRemuxRouteAvailable reports whether a Jellyfin client may
-// use any progressive-remux transport admitted by the current policy. This is
+// compatRemuxRouteAvailable reports whether a Jellyfin client may use any
+// transport for this remux delivery admitted by the current policy. This is
 // a structural check only: temporary node capacity remains a runtime concern.
-func compatProgressiveRemuxRouteAvailable(policy config.PlaybackRoutingPolicy, proxyAllowed bool) bool {
+func compatRemuxRouteAvailable(policy config.PlaybackRoutingPolicy, delivery noderouting.Delivery, proxyAllowed bool) bool {
 	routes, err := noderouting.Candidates(noderouting.Request{
-		Workload: noderouting.WorkloadRemux, Delivery: noderouting.DeliveryProgressiveRemux,
+		Workload: noderouting.WorkloadRemux, Delivery: delivery,
 		Policy: policy, ProxyAllowed: proxyAllowed,
 	})
 	return err == nil && len(routes.Candidates) > 0
@@ -2353,8 +2353,7 @@ func (h *PlaybackHandler) HandlePlaybackInfo(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusServiceUnavailable, "PlaybackUnavailable", "Subtitle metadata is temporarily unavailable")
 			return
 		}
-		source.HLSRemuxMPEGTS = compatWebOSDVMPEGTS(r.UserAgent(), source) || compatRokuMPEGTS(r.UserAgent(), profile, source) ||
-			source.hlsRemuxInTS && compatHLSCopiesVideo(source) && !source.DVStripToHDR10
+		source.HLSRemuxMPEGTS = source.hlsRemuxInTS || compatWebOSDVMPEGTS(r.UserAgent(), source) || compatRokuMPEGTS(r.UserAgent(), profile, source)
 		applyCompatSubtitleDelivery(&source, profile, req.AlwaysBurnInSubtitleWhenTranscoding)
 		applyCompatDownloadedSubtitleDelivery(&source, profile, downloaded)
 		// Only a copy stream is served from a keyframe playlist; subtitle
@@ -2662,11 +2661,18 @@ func (h *PlaybackHandler) buildPlaybackSource(
 		targetAudioChannels = 1
 	}
 	// A copy is packaged as fMP4, or as MPEG-TS for a client that accepts the
-	// same codecs only there and has no progressive remux to take instead.
+	// same codecs only there and has no fMP4 route, progressive remux or AAC
+	// conversion included, to take instead.
+	routingPolicy, proxyAllowed := h.playbackRoutingPolicy(), h.JWTSecret != ""
 	progressiveRemuxOK := enableDirectStream && allowVideoCopy && videoSupported && allowAudioCopy && audioSupported &&
-		compatProgressiveRemuxRouteAvailable(h.playbackRoutingPolicy(), h.JWTSecret != "")
+		compatRemuxRouteAvailable(routingPolicy, noderouting.DeliveryProgressiveRemux, proxyAllowed)
 	remuxAudioCopyFMP4 := profile.SupportsHLSRemuxForAudioStream(version, selectedAudioIndex)
-	remuxAudioCopyTS := !remuxAudioCopyFMP4 && !progressiveRemuxOK && playback.HLSCopyFitsMPEGTS(version.CodecVideo, compatAudioCodec(version, selectedAudioIndex)) &&
+	remuxAudioEncodeFMP4 := profile.supportsHLSRemuxWithAudioTranscodeForAudioStream(version, selectedAudioIndex, targetAudioChannels)
+	fmp4AudioEncodeOK := req.serverBitrateCapKbps == 0 && (!allowAudioCopy || !audioSupported) && remuxAudioEncodeFMP4
+	tsRemuxOK := playback.HLSCopyFitsMPEGTS(version.CodecVideo, "") && len(profile.TranscodingProfiles) > 0 &&
+		compatRemuxRouteAvailable(routingPolicy, noderouting.DeliveryHLSRemux, proxyAllowed)
+	remuxAudioCopyTS := tsRemuxOK && !remuxAudioCopyFMP4 && !fmp4AudioEncodeOK && !progressiveRemuxOK &&
+		playback.HLSCopyFitsMPEGTS(version.CodecVideo, compatAudioCodec(version, selectedAudioIndex)) &&
 		profile.supportsHLSRemuxIn(version, selectedAudioIndex, compatContainerTS)
 	hlsAudioCopy := !bitrateRequiresEncode && !channelsRequireEncode && enableTranscoding &&
 		enableDirectStream &&
@@ -2674,8 +2680,7 @@ func (h *PlaybackHandler) buildPlaybackSource(
 		allowAudioCopy &&
 		!supportsDirectPlay &&
 		(remuxAudioCopyFMP4 || remuxAudioCopyTS)
-	remuxAudioEncodeFMP4 := profile.supportsHLSRemuxWithAudioTranscodeForAudioStream(version, selectedAudioIndex, targetAudioChannels)
-	remuxAudioEncodeTS := !remuxAudioEncodeFMP4 && playback.HLSCopyFitsMPEGTS(version.CodecVideo, "") &&
+	remuxAudioEncodeTS := tsRemuxOK && !remuxAudioEncodeFMP4 &&
 		profile.supportsHLSRemuxWithAudioTranscodeIn(version, selectedAudioIndex, targetAudioChannels, compatContainerTS)
 	hlsAudioTranscode := req.serverBitrateCapKbps == 0 && !bitrateRequiresEncode && !hlsAudioCopy &&
 		enableTranscoding &&
@@ -2706,11 +2711,12 @@ func (h *PlaybackHandler) buildPlaybackSource(
 	// Do not advertise a transport the routing policy structurally forbids;
 	// clients can then select the independently negotiated HLS route instead.
 	if supportsDirectStream && !supportsDirectPlay &&
-		!compatProgressiveRemuxRouteAvailable(h.playbackRoutingPolicy(), h.JWTSecret != "") {
+		!compatRemuxRouteAvailable(routingPolicy, noderouting.DeliveryProgressiveRemux, proxyAllowed) {
 		supportsDirectStream = false
 	}
-	// Copy and audio-transcode remuxes must match the fMP4 output profile;
-	// full video encodes independently match the MPEG-TS output profile.
+	// Copy and audio-transcode remuxes must match the output profile of the
+	// container chosen above; full video encodes independently match the
+	// MPEG-TS output profile.
 	// An encode targets the client's ceiling, less audio and mux overhead,
 	// and the profile's own bitrate and frame size limits for that codec.
 	sourceVideo := compatPrimaryVideoTrack(version)

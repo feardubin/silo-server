@@ -807,9 +807,10 @@ whose profile offers MPEG-TS HLS is therefore packaged as MPEG-TS on the
 keeps fMP4.
 
 Any other client that lists the source codecs for MPEG-TS HLS but not for fMP4
-also gets a video copy as MPEG-TS, unless it can take a progressive remux. This
-covers H.264 and HEVC with AAC, AC-3, E-AC-3, or MP3 audio; other audio converts
-to AAC when the profile accepts it.
+also gets a video copy as MPEG-TS, unless it can take a progressive remux or an
+fMP4 copy with the audio converted to AAC. This covers H.264 and HEVC with AAC,
+AC-3, E-AC-3, or MP3 audio; other audio converts to AAC when the profile accepts
+it.
 
 ## AAC encodes
 
