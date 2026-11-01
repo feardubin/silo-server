@@ -687,6 +687,7 @@ func validateConditions(c RouteConditions, mediaType MediaType, fields map[strin
 			}
 		}
 	}
+	validateMediaTypeConditions(c, mediaType, fields)
 	validateSeriesStatuses(c, mediaType, fields)
 	// A value both wanted and excluded makes the rule match nothing.
 	overlaps := slices.ContainsFunc(c.GenreIDs, func(v int) bool { return slices.Contains(c.ExcludeGenreIDs, v) }) ||
@@ -711,6 +712,23 @@ func validateConditions(c RouteConditions, mediaType MediaType, fields map[strin
 	}
 	if c.YearFrom != 0 && c.YearTo != 0 && c.YearFrom > c.YearTo {
 		fields["conditions.year_to"] = "The end year comes before the start year."
+	}
+}
+
+func validateMediaTypeConditions(c RouteConditions, mediaType MediaType, fields map[string]string) {
+	for field, values := range map[string][]int{
+		condNetworkIDs: c.NetworkIDs, condExcludeNetworkIDs: c.ExcludeNetworkIDs,
+	} {
+		if len(values) > 0 && mediaType == MediaTypeMovie {
+			fields["conditions."+field] = "Only series rules can match on networks."
+		}
+	}
+	for field, values := range map[string][]int{
+		condCompanyIDs: c.CompanyIDs, condExcludeCompanyIDs: c.ExcludeCompanyIDs,
+	} {
+		if len(values) > 0 && mediaType == MediaTypeSeries {
+			fields["conditions."+field] = "Only movie rules can match on studios."
+		}
 	}
 }
 

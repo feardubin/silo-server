@@ -115,6 +115,12 @@ func TestRuleValidationForNewConditions(t *testing.T) {
 		t.Fatalf("an exclude-only rule is a rule: %v", err)
 	}
 
+	networks := Route{MediaType: MediaTypeSeries, Name: "Networks", Enabled: true, SkipUHD: true,
+		Conditions: RouteConditions{NetworkIDs: []int{49}, ExcludeNetworkIDs: []int{50}}}
+	if err := svc.validateRoute(context.Background(), &networks); err != nil {
+		t.Fatalf("a series rule can match on networks: %v", err)
+	}
+
 	series := Route{MediaType: MediaTypeSeries, Name: "Ended", Enabled: true}
 	for _, tc := range []struct {
 		name       string
@@ -122,6 +128,10 @@ func TestRuleValidationForNewConditions(t *testing.T) {
 		conditions RouteConditions
 		field      string
 	}{
+		{"movie networks", MediaTypeMovie, RouteConditions{NetworkIDs: []int{49}}, "conditions.network_ids"},
+		{"movie excluded networks", MediaTypeMovie, RouteConditions{ExcludeNetworkIDs: []int{49}}, "conditions.exclude_network_ids"},
+		{"series studios", MediaTypeSeries, RouteConditions{CompanyIDs: []int{50}}, "conditions.company_ids"},
+		{"series excluded studios", MediaTypeSeries, RouteConditions{ExcludeCompanyIDs: []int{50}}, "conditions.exclude_company_ids"},
 		{"a movie rule on status", MediaTypeMovie, RouteConditions{ExcludeSeriesStatuses: []string{"ended"}}, "conditions.exclude_series_statuses"},
 		{"TMDB's own spelling", MediaTypeSeries, RouteConditions{SeriesStatuses: []string{"Canceled"}}, "conditions.series_statuses"},
 		{"a status both wanted and excluded", MediaTypeSeries, RouteConditions{SeriesStatuses: []string{"ended"}, ExcludeSeriesStatuses: []string{"ENDED"}}, "conditions"},
