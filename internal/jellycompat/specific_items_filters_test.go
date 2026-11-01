@@ -135,7 +135,7 @@ func TestMixedSpecificIDsFilterAllSelectedPages(t *testing.T) {
 	}}
 	h := &ItemsHandler{content: content}
 	got, err := h.filteredSpecificMediaIDs(context.Background(), collectionsTestSession(), itemsQuery{
-		specificIDs: selected, isFavorite: true, startIndex: 50, limit: 1,
+		specificIDs: selected, isFavorite: new(true), startIndex: 50, limit: 1,
 	})
 	want := append(slices.Clone(selected[:1000]), selected[1001])
 	if err != nil || calls != 2 || !slices.Equal(got, want) {

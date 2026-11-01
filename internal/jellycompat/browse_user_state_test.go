@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
@@ -51,7 +52,7 @@ func TestConfiguredBrowseStateSQLiteCountAndPage(t *testing.T) {
 	}
 	for _, call := range browse.calls {
 		f := call.filters
-		if f.IsFavorite || f.IsPlayed != nil || f.IsResumable || !slices.Equal(f.Genres, []string{"Drama"}) || !slices.Equal(f.Years, []int{2024}) || f.Limit != compatBrowseChunkLimit {
+		if f.IsFavorite != nil || f.IsPlayed != nil || f.IsResumable || !slices.Equal(f.Genres, []string{"Drama"}) || !slices.Equal(f.Years, []int{2024}) || f.Limit != compatBrowseChunkLimit {
 			t.Fatalf("candidate filters: %+v", f)
 		}
 	}
@@ -124,7 +125,7 @@ func TestConfiguredBrowseStatePropagatesErrors(t *testing.T) {
 	for _, failure := range []string{"favorite", "progress", "history"} {
 		t.Run(failure, func(t *testing.T) {
 			store := failedBrowseStateStore{UserStore: newJellycompatUserStore(t), failure: failure}
-			_, err := (&directContentService{}).matchConfiguredUserState(t.Context(), store, "p1", []upstreamListItem{{ContentID: "movie", Type: "movie"}}, catalog.BrowseFilters{IsFavorite: true, IsPlayed: new(true)})
+			_, err := (&directContentService{}).matchConfiguredUserState(t.Context(), store, "p1", []upstreamListItem{{ContentID: "movie", Type: "movie"}}, catalog.BrowseFilters{IsFavorite: new(true), IsPlayed: new(true)})
 			if err == nil {
 				t.Fatal("state error hidden")
 			}
@@ -157,7 +158,7 @@ type configuredParentRepo struct {
 
 func (r *configuredParentRepo) BrowseEpisodes(_ context.Context, series, season string, number *int, start string, f catalog.BrowseFilters, _ catalog.AccessFilter, includeTotal bool) ([]*models.Episode, int, error) {
 	r.t.Helper()
-	if series != "series" || season != "season" || start != "start" || number == nil || *number != 2 || f.IsFavorite || f.IsPlayed != nil || f.IsResumable || !slices.Equal(f.Genres, []string{"Drama"}) || !slices.Equal(f.Years, []int{2024}) {
+	if series != "series" || season != "season" || start != "start" || number == nil || *number != 2 || f.IsFavorite != nil || f.IsPlayed != nil || f.IsResumable || !slices.Equal(f.Genres, []string{"Drama"}) || !slices.Equal(f.Years, []int{2024}) {
 		r.t.Fatalf("parent constraints lost: %q %q %q %v %+v", series, season, start, number, f)
 	}
 	if includeTotal || f.Limit != compatBrowseChunkLimit+1 {
@@ -193,7 +194,7 @@ func TestConfiguredParentEpisodesCountBeforePaging(t *testing.T) {
 				codec := NewResourceIDCodec()
 				content := configuredParentContent{&directContentService{storeProvider: compatTestUserStoreProvider{store: store}}}
 				h := &ItemsHandler{content: content, episodeRepo: repo, codec: codec, mapper: newMapper(codec, &config.Config{}), userData: &mockUserDataService{}, images: NewImageCache(time.Hour, time.Now)}
-				query := itemsQuery{enableTotalRecordCount: includeTotal, isFavorite: true, isPlayed: new(false), genres: []string{"Drama"}, years: []int{2024}, seasonNumber: new(2), startIndex: 1, limit: 1, startItemID: codec.EncodeStringID(EncodedIDItem, "start")}
+				query := itemsQuery{enableTotalRecordCount: includeTotal, isFavorite: new(true), isPlayed: new(false), genres: []string{"Drama"}, years: []int{2024}, seasonNumber: new(2), startIndex: 1, limit: 1, startItemID: codec.EncodeStringID(EncodedIDItem, "start")}
 				req := httptest.NewRequest("GET", "/Items", nil)
 				rec := httptest.NewRecorder()
 				h.writeSeriesEpisodesResponse(rec, req, &Session{StreamAppUserID: 1, ProfileID: "p1"}, query, "series", "season", true)
@@ -306,7 +307,7 @@ func TestConfiguredBrowseHugeLimitWithoutTotal(t *testing.T) {
 		}
 	}
 	svc := &directContentService{storeProvider: compatTestUserStoreProvider{store: store}}
-	filters := catalog.BrowseFilters{IsFavorite: true, Offset: 1, Limit: math.MaxInt}
+	filters := catalog.BrowseFilters{IsFavorite: new(true), Offset: 1, Limit: math.MaxInt}
 	result, err := svc.browseConfiguredUserState(t.Context(), &Session{StreamAppUserID: 1, ProfileID: "p1"}, filters, false, func(catalog.BrowseFilters) ([]upstreamListItem, bool, error) {
 		return items, false, nil
 	})
@@ -379,6 +380,51 @@ func TestConfiguredSeriesBrowseEnrichesSelectedPage(t *testing.T) {
 			dto := newMapper(NewResourceIDCodec(), &config.Config{}).itemFromList(result.Items[0], true, nil, nil)
 			if dto.UserData == nil || dto.UserData.Played != tc.wantPlayed || dto.UserData.UnplayedItemCount != tc.unplayed || !dto.UserData.IsFavorite {
 				t.Fatalf("series mapping: %+v", dto.UserData)
+			}
+		})
+	}
+}
+
+type favoriteTriStateBrowseSource struct{ stubBrowseSource }
+
+func (s *favoriteTriStateBrowseSource) BrowsePage(ctx context.Context, filters catalog.BrowseFilters, includeTotal bool) (*catalog.BrowseResult, error) {
+	if filters.Type != "movie" {
+		return &catalog.BrowseResult{}, nil
+	}
+	return s.stubBrowseSource.BrowsePage(ctx, filters, includeTotal)
+}
+
+func TestConfiguredItemCountsFavoriteTriState(t *testing.T) {
+	store := newJellycompatUserStore(t)
+	if _, err := store.AddFavorite(t.Context(), "p1", "favorite"); err != nil {
+		t.Fatal(err)
+	}
+	browse := &favoriteTriStateBrowseSource{stubBrowseSource{total: 3, items: []*models.MediaItem{
+		{ContentID: "favorite", Type: "movie"}, {ContentID: "other", Type: "movie"}, {ContentID: "another", Type: "movie"},
+	}}}
+	svc := &directContentService{browseRepo: browse, storeProvider: compatTestUserStoreProvider{store: store}}
+	for _, tc := range []struct {
+		raw  string
+		want int
+	}{
+		{"true", 1}, {"false", 2}, {"", 3}, {"yes", 3},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			h := &ItemsHandler{content: svc}
+			path := "/Items/Counts"
+			if tc.raw != "" {
+				path += "?isFavorite=" + tc.raw
+			}
+			req := httptest.NewRequest("GET", path, nil)
+			req = req.WithContext(context.WithValue(req.Context(), compatSessionKey, &Session{StreamAppUserID: 1, ProfileID: "p1"}))
+			rec := httptest.NewRecorder()
+			h.HandleItemCounts(rec, req)
+			var counts itemCountsDTO
+			if err := json.Unmarshal(rec.Body.Bytes(), &counts); err != nil || rec.Code != http.StatusOK {
+				t.Fatalf("counts: status=%d body=%s err=%v", rec.Code, rec.Body.String(), err)
+			}
+			if counts.MovieCount != tc.want || counts.SeriesCount != 0 || counts.ItemCount != tc.want {
+				t.Fatalf("counts=%+v want %d movies", counts, tc.want)
 			}
 		})
 	}

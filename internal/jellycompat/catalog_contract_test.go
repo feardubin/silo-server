@@ -50,12 +50,24 @@ func (s *composedBrowseContent) BrowseItems(_ context.Context, _ *Session, param
 	return &upstreamBrowseResponse{Items: []upstreamListItem{}}, nil
 }
 func TestCombinedSearchPlayedFavoriteUsesBrowse(t *testing.T) {
-	svc := &composedBrowseContent{}
-	codec := NewResourceIDCodec()
-	h := &ItemsHandler{content: svc, codec: codec, mapper: newMapper(codec, &config.Config{}), userData: &mockUserDataService{}, images: NewImageCache(time.Hour, time.Now)}
-	performItemsRequest(t, h, "/Items?SearchTerm=Drama&IsPlayed=true&isFavorite=true&Limit=1&StartIndex=2")
-	if svc.params.Get("search_term") != "Drama" || svc.params.Get("is_favorite") != "true" || svc.params.Get("is_played") != "true" {
-		t.Fatalf("lost combined predicates: %v", svc.params)
+	for _, tc := range []struct {
+		name, query, favorite string
+	}{
+		{"favorite", "IsFavorite=true", "true"},
+		{"nonfavorite", "IsFavorite=false", "false"},
+		{"Filters precedence", "IsFavorite=false&Filters=IsFavorite", "true"},
+		{"omitted", "", ""},
+		{"invalid", "IsFavorite=yes", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &composedBrowseContent{}
+			codec := NewResourceIDCodec()
+			h := &ItemsHandler{content: svc, codec: codec, mapper: newMapper(codec, &config.Config{}), userData: &mockUserDataService{}, images: NewImageCache(time.Hour, time.Now)}
+			performItemsRequest(t, h, "/Items?SearchTerm=Drama&IsPlayed=true&Limit=1&StartIndex=2&"+tc.query)
+			if svc.params.Get("search_term") != "Drama" || svc.params.Get("is_favorite") != tc.favorite || svc.params.Get("is_played") != "true" || svc.params.Get("compose_state") != "true" {
+				t.Fatalf("lost combined predicates: %v, want favorite %q", svc.params, tc.favorite)
+			}
+		})
 	}
 }
 
@@ -228,7 +240,7 @@ func TestParentEpisodesComposeFiltersBeforePage(t *testing.T) {
 				} else {
 					result = performItemsRequest(t, h, "/Items?ParentId="+seriesID+"&"+params)
 				}
-				if repo.seriesID != "series" || repo.seasonNumber == nil || *repo.seasonNumber != 2 || repo.filters.IsPlayed == nil || *repo.filters.IsPlayed || !repo.filters.IsFavorite || repo.filters.ProfileID == "" || repo.filters.Offset != 3 || repo.filters.Limit != 1 || len(repo.filters.Genres) != 1 || len(repo.filters.Years) != 1 || repo.access.MaxContentRating != "PG" || repo.includeTotal != tc.includeTotal {
+				if repo.seriesID != "series" || repo.seasonNumber == nil || *repo.seasonNumber != 2 || repo.filters.IsPlayed == nil || *repo.filters.IsPlayed || (repo.filters.IsFavorite == nil || !*repo.filters.IsFavorite) || repo.filters.ProfileID == "" || repo.filters.Offset != 3 || repo.filters.Limit != 1 || len(repo.filters.Genres) != 1 || len(repo.filters.Years) != 1 || repo.access.MaxContentRating != "PG" || repo.includeTotal != tc.includeTotal {
 					t.Fatalf("lost parent predicate or count option: %+v", repo)
 				}
 				wantTotal := 0
@@ -403,7 +415,7 @@ func TestEpisodeOnlyBrowseSpansEverySeries(t *testing.T) {
 	// browse takes the episode browse as well.
 	repo = &boundedEpisodeContractRepo{}
 	result = performItemsRequest(t, newHandler(repo), "/Items?IncludeItemTypes=Episode&Recursive=true&IsFavorite=true&Limit=1")
-	if repo.seriesID != "" || !repo.filters.IsFavorite || result.TotalRecordCount != 6 {
+	if repo.seriesID != "" || (repo.filters.IsFavorite == nil || !*repo.filters.IsFavorite) || result.TotalRecordCount != 6 {
 		t.Fatalf("favorite episode browse = series %q filters %+v total %d", repo.seriesID, repo.filters, result.TotalRecordCount)
 	}
 
@@ -417,7 +429,7 @@ func TestEpisodeOnlyBrowseSpansEverySeries(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &counts); err != nil {
 			t.Fatalf("decode ItemCounts: %v; body=%s", err, rec.Body.String())
 		}
-		if repo.seriesID != "" || repo.filters.Limit != 0 || repo.filters.IsFavorite != favorite || !repo.includeTotal {
+		if repo.seriesID != "" || repo.filters.Limit != 0 || (repo.filters.IsFavorite == nil || *repo.filters.IsFavorite != favorite) || !repo.includeTotal {
 			t.Fatalf("favorite=%v episode count query = series %q filters %+v", favorite, repo.seriesID, repo.filters)
 		}
 		if counts.EpisodeCount != 6 || counts.ItemCount != 3+2+6 {

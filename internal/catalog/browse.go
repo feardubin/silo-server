@@ -34,7 +34,7 @@ type BrowseFilters struct {
 	Genre              string // single genre filter (GIN index)
 	UserID             int
 	ProfileID          string
-	IsFavorite         bool
+	IsFavorite         *bool
 	IsPlayed           *bool
 	IsResumable        bool
 	Genres             []string // any matching genre
@@ -1782,7 +1782,7 @@ func appendCompatBrowsePredicates(filters BrowseFilters, conditions *[]string, a
 			*conditions = append(*conditions, fmt.Sprintf(`EXISTS (SELECT 1 FROM media_files mf WHERE %s AND %s AND (mf.subtitle_language_codes && $%[3]d::text[] OR EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(mf.external_subtitles, '[]'::jsonb)) AS track WHERE LOWER(COALESCE(track->>'language', '')) = ANY($%[3]d::text[]))))`, mediaFileJoin, fileScope, bind(subtitleCodes)))
 		}
 	}
-	if !filters.IsFavorite && filters.IsPlayed == nil && !filters.IsResumable {
+	if filters.IsFavorite == nil && filters.IsPlayed == nil && !filters.IsResumable {
 		return
 	}
 	if filters.UserID <= 0 || filters.ProfileID == "" {
@@ -1790,12 +1790,16 @@ func appendCompatBrowsePredicates(filters BrowseFilters, conditions *[]string, a
 		return
 	}
 	userArg, profileArg := *argIdx, *argIdx+1
-	if filters.IsFavorite || filters.IsResumable {
+	if filters.IsFavorite != nil || filters.IsResumable {
 		*args = append(*args, filters.UserID, filters.ProfileID)
 		*argIdx += 2
 	}
-	if filters.IsFavorite {
-		*conditions = append(*conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM user_favorites uf WHERE uf.user_id = $%d AND uf.profile_id = $%d AND uf.media_item_id = mi.content_id)", userArg, profileArg))
+	if filters.IsFavorite != nil {
+		predicate := fmt.Sprintf("EXISTS (SELECT 1 FROM user_favorites uf WHERE uf.user_id = $%d AND uf.profile_id = $%d AND uf.media_item_id = mi.content_id)", userArg, profileArg)
+		if !*filters.IsFavorite {
+			predicate = "NOT " + predicate
+		}
+		*conditions = append(*conditions, predicate)
 	}
 	if filters.IsPlayed != nil {
 		builder := NewQueryBuilder("mi").WithUserScope(filters.UserID, filters.ProfileID)

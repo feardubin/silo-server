@@ -103,12 +103,35 @@ func TestJellycompatPredicatesPostgres(t *testing.T) {
 			link(id, disabledID)
 		}
 	}
-	base := BrowseFilters{Type: "movie", ContentIDs: movieIDs, Genres: []string{"Drama"}, Years: []int{2024}, IsFavorite: true, IsPlayed: new(false), UserID: userID, ProfileID: profiles[0], LibraryIDs: []int{libraryID}, DisabledLibraryIDs: []int{disabledID}, MaturityLimits: access.MaturityLimits{MaxContentRating: "PG"}, Sort: "sort_title", Order: "asc", Limit: 1, Offset: 1}
+	base := BrowseFilters{Type: "movie", ContentIDs: movieIDs, Genres: []string{"Drama"}, Years: []int{2024}, IsFavorite: new(true), IsPlayed: new(false), UserID: userID, ProfileID: profiles[0], LibraryIDs: []int{libraryID}, DisabledLibraryIDs: []int{disabledID}, MaturityLimits: access.MaturityLimits{MaxContentRating: "PG"}, Sort: "sort_title", Order: "asc", Limit: 1, Offset: 1}
 	browse := NewBrowseRepository(pool)
+	t.Run("favorite tri-state", func(t *testing.T) {
+		for _, tc := range []struct {
+			favorite *bool
+			want     []string
+		}{
+			{nil, movieIDs}, {new(true), []string{movieIDs[0], movieIDs[1], movieIDs[2], movieIDs[3], movieIDs[4], movieIDs[7]}},
+			{new(false), []string{movieIDs[5], movieIDs[6]}},
+		} {
+			query := BrowseFilters{Type: "movie", ContentIDs: movieIDs, UserID: userID, ProfileID: profiles[0], IsFavorite: tc.favorite, Sort: "sort_title", Order: "asc", Limit: 20}
+			result, err := browse.BrowsePage(ctx, query, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, item := range result.Items {
+				got = append(got, item.ContentID)
+			}
+			if !slices.Equal(got, tc.want) || result.Total != len(tc.want) {
+				t.Fatalf("items=%v total=%d want=%v", got, result.Total, tc.want)
+			}
+		}
+	})
+
 	t.Run("played only binds every parameter", func(t *testing.T) {
 		for _, completed := range []bool{true, false} {
 			query := base
-			query.IsFavorite = false
+			query.IsFavorite = nil
 			query.IsPlayed = new(completed)
 			query.Offset = 0
 			result, err := browse.BrowsePage(ctx, query, true)
@@ -268,7 +291,7 @@ func TestJellycompatPredicatesPostgres(t *testing.T) {
 	t.Run("episode played only binds every parameter", func(t *testing.T) {
 		for _, completed := range []bool{true, false} {
 			query := q
-			query.IsFavorite = false
+			query.IsFavorite = nil
 			query.IsPlayed = new(completed)
 			query.Offset = 0
 			items, total, err := episodes.BrowseEpisodes(ctx, seriesID, seasonIDs[0], nil, "", query, access, true)
@@ -304,7 +327,7 @@ func TestJellycompatPredicatesPostgres(t *testing.T) {
 		}
 
 		favorites := all
-		favorites.IsFavorite = true
+		favorites.IsFavorite = new(true)
 		favorites.Limit = 0
 		items, total, err = episodes.BrowseEpisodes(ctx, "", "", nil, "", favorites, access, true)
 		if err != nil {

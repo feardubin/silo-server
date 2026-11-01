@@ -422,7 +422,6 @@ func (s *directContentService) BrowseItems(ctx context.Context, session *Session
 		UserID:                  session.StreamAppUserID,
 		ProfileID:               session.ProfileID,
 		IsPlayed:                played,
-		IsFavorite:              parseBool(params.Get("is_favorite"), false),
 		IsResumable:             parseBool(params.Get("is_resumable"), false),
 		Genre:                   params.Get("genre"),
 		Genres:                  splitNonemptyGenres(params.Get("genres")),
@@ -453,13 +452,16 @@ func (s *directContentService) BrowseItems(ctx context.Context, session *Session
 		SubtitleLanguages:       splitCommaValues([]string{params.Get("subtitle_languages")}),
 		MaxPlaybackQuality:      filter.MaxPlaybackQuality,
 	}
+	if value, ok := parseOptionalBool(params.Get("is_favorite")); ok {
+		filters.IsFavorite = new(value)
+	}
 	if collectionID := params.Get("collection_id"); collectionID != "" {
 		filters.RestrictToLibraryCollection(collectionID)
 	}
 	// Limit=0 wants only the total. Count directly unless played state is a
 	// profile overlay applied after the catalog query.
 	if parseBool(params.Get("count_only"), false) && isPlayedFilter == "" &&
-		(s.catalogUserState || (!filters.IsFavorite && filters.IsPlayed == nil && !filters.IsResumable)) {
+		(s.catalogUserState || (filters.IsFavorite == nil && filters.IsPlayed == nil && !filters.IsResumable)) {
 		if counter, ok := s.browseRepo.(interface {
 			BrowseCount(context.Context, catalog.BrowseFilters) (int, error)
 		}); ok {
@@ -470,28 +472,29 @@ func (s *directContentService) BrowseItems(ctx context.Context, session *Session
 			return &upstreamBrowseResponse{Total: total, Items: []upstreamListItem{}}, nil
 		}
 	}
-	if !s.catalogUserState && (filters.IsFavorite || filters.IsPlayed != nil || filters.IsResumable || isPlayedFilter != "") {
+	browseConfiguredPage := func(page catalog.BrowseFilters) ([]upstreamListItem, bool, error) {
+		result, err := s.browseRepo.BrowsePage(ctx, page, false)
+		if err != nil {
+			return nil, false, err
+		}
+		localized := result.Items
+		if s.detailSvc != nil {
+			if models, err := s.detailSvc.LocalizeItemModels(ctx, result.Items, filter); err == nil && models != nil {
+				localized = models
+			}
+		}
+		items := make([]upstreamListItem, 0, len(localized))
+		for _, item := range localized {
+			items = append(items, mediaItemToListItem(item))
+		}
+		return items, result.HasMore, nil
+	}
+	if !s.catalogUserState && (filters.IsFavorite != nil || filters.IsPlayed != nil || filters.IsResumable || isPlayedFilter != "") {
 		if isPlayedFilter != "" {
 			filters.IsPlayed = new(parseBool(isPlayedFilter, false))
 		}
 		filters.Limit = requestedLimit
-		result, err := s.browseConfiguredUserState(ctx, session, filters, includeTotal, func(page catalog.BrowseFilters) ([]upstreamListItem, bool, error) {
-			result, err := s.browseRepo.BrowsePage(ctx, page, false)
-			if err != nil {
-				return nil, false, err
-			}
-			localized := result.Items
-			if s.detailSvc != nil {
-				if models, err := s.detailSvc.LocalizeItemModels(ctx, result.Items, filter); err == nil && models != nil {
-					localized = models
-				}
-			}
-			items := make([]upstreamListItem, 0, len(localized))
-			for _, item := range localized {
-				items = append(items, mediaItemToListItem(item))
-			}
-			return items, result.HasMore, nil
-		})
+		result, err := s.browseConfiguredUserState(ctx, session, filters, includeTotal, browseConfiguredPage)
 		if err != nil {
 			return nil, err
 		}

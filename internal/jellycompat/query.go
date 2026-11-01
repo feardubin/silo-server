@@ -35,7 +35,7 @@ type itemsQuery struct {
 	enableImageTypes       map[string]bool
 	seasonNumber           *int
 	totalOverride          *int
-	isFavorite             bool
+	isFavorite             *bool
 	isResumable            bool
 	isNotFolder            bool // Filters=IsNotFolder or IsFolder=false: leaf items only
 	includesOnlyLeafTypes  bool // IncludeItemTypes names Episode and no Series or Season
@@ -227,7 +227,7 @@ func parseItemsQuery(r *http.Request, codec *ResourceIDCodec) itemsQuery {
 		result.subtitleLanguages = splitCommaValues(q.Values("SubtitleLanguages"))
 	}
 	result.hasRootFilter = hasAnyNonEmptyParam(q, jellyfinRootFilterParams)
-	result.isFavorite = hasFilter(q.Get("Filters"), "IsFavorite") || parseBool(q.Get("IsFavorite"), false)
+	result.isFavorite = parseFavoriteFilter(q)
 	result.isResumable = hasFilter(q.Get("Filters"), "IsResumable")
 	result.isNotFolder = hasFilter(q.Get("Filters"), "IsNotFolder") || strings.EqualFold(strings.TrimSpace(q.Get("IsFolder")), "false")
 
@@ -340,7 +340,7 @@ func buildLatestBrowseParams(query itemsQuery) url.Values {
 
 func buildBrowseParams(query itemsQuery) url.Values {
 	params := url.Values{}
-	if query.isPlayed != nil || query.isFavorite || query.isResumable {
+	if query.isPlayed != nil || query.isFavorite != nil || query.isResumable {
 		params.Set("compose_state", "true")
 	}
 	if len(query.genres) > 0 {
@@ -407,8 +407,8 @@ func buildBrowseParams(query itemsQuery) url.Values {
 	if query.countOnly {
 		params.Set("count_only", "true")
 	}
-	if query.isFavorite {
-		params.Set("is_favorite", "true")
+	if query.isFavorite != nil {
+		params.Set("is_favorite", strconv.FormatBool(*query.isFavorite))
 	}
 	if query.isResumable {
 		params.Set("is_resumable", "true")
@@ -946,7 +946,7 @@ func parsePremiereDateBound(raw string, isMin bool) string {
 // hasIntersectingFilters selects catalog predicate composition before specialized
 // rails can discard filters. Unfiltered rails keep their episode-aware semantics.
 func (q itemsQuery) hasIntersectingFilters() bool {
-	return len(q.genres) > 0 || len(q.years) > 0 || q.hasCompatBrowseFilters() || q.genreName != "" || q.personID > 0 || q.requireBackdrop || len(q.audioLanguages) > 0 || len(q.subtitleLanguages) > 0 || q.maxOfficialRating != "" || q.namePrefix != "" || (q.searchTerm != "" && (q.isFavorite || q.isPlayed != nil || q.isResumable || q.sortExplicit)) || (q.isFavorite && (q.isPlayed != nil || q.isResumable)) || (q.isResumable && q.isPlayed != nil)
+	return len(q.genres) > 0 || len(q.years) > 0 || q.hasCompatBrowseFilters() || q.genreName != "" || q.personID > 0 || q.requireBackdrop || len(q.audioLanguages) > 0 || len(q.subtitleLanguages) > 0 || q.maxOfficialRating != "" || q.namePrefix != "" || (q.searchTerm != "" && (q.isFavorite != nil || q.isPlayed != nil || q.isResumable || q.sortExplicit)) || (q.isFavorite != nil && (q.isPlayed != nil || q.isResumable)) || (q.isResumable && q.isPlayed != nil)
 }
 
 // matchesNothing reports whether an ID filter names nothing, so the request
@@ -969,7 +969,7 @@ func (q itemsQuery) listsUserRootViews() bool {
 // hasMemberFilters reports whether the request narrows results by catalog
 // fields, search, or user state.
 func (q itemsQuery) hasMemberFilters() bool {
-	return q.hasIntersectingFilters() || q.searchTerm != "" || q.isFavorite || q.isPlayed != nil || q.isResumable
+	return q.hasIntersectingFilters() || q.searchTerm != "" || q.isFavorite != nil || q.isPlayed != nil || q.isResumable
 }
 
 // allowsItemType reports whether the IncludeItemTypes/ExcludeItemTypes filter,
@@ -981,4 +981,15 @@ func (q itemsQuery) allowsItemType(itemType string) bool {
 // allowsVideo reports whether the MediaTypes filter, if any, admits video.
 func (q itemsQuery) allowsVideo() bool {
 	return !q.mediaTypesExplicit || q.mediaTypesSet["video"]
+}
+
+func parseFavoriteFilter(q caseInsensitiveQuery) *bool {
+	// Jellyfin applies Filters after the explicit IsFavorite parameter.
+	if hasFilter(q.Get("Filters"), "IsFavorite") {
+		return new(true)
+	}
+	if value, ok := parseOptionalBool(q.Get("IsFavorite")); ok {
+		return new(value)
+	}
+	return nil
 }

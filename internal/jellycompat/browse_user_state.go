@@ -27,7 +27,7 @@ func (s *directContentService) browseConfiguredUserState(ctx context.Context, se
 	if page.Sort == compatBrowseRandomSort && page.SnapshotAt == nil {
 		page.SnapshotAt = new(time.Now().UTC())
 	}
-	page.IsFavorite, page.IsPlayed, page.IsResumable = false, nil, false
+	page.IsFavorite, page.IsPlayed, page.IsResumable = nil, nil, false
 	page.Offset, page.Limit = 0, compatBrowseChunkLimit
 	result := &upstreamBrowseResponse{Items: []upstreamListItem{}}
 	for {
@@ -97,7 +97,7 @@ func (s *directContentService) matchConfiguredUserState(ctx context.Context, sto
 	ids := contentIDsFromListItems(items)
 	var favorites map[string]bool
 	var err error
-	if filters.IsFavorite {
+	if filters.IsFavorite != nil {
 		favorites, err = store.ListFavoritesByMediaItems(ctx, profileID, ids)
 		if err != nil {
 			return nil, err
@@ -114,7 +114,7 @@ func (s *directContentService) matchConfiguredUserState(ctx context.Context, sto
 		return nil, err
 	}
 	for i, item := range items {
-		if filters.IsFavorite && !favorites[item.ContentID] {
+		if filters.IsFavorite != nil && favorites[item.ContentID] != *filters.IsFavorite {
 			continue
 		}
 		if filters.IsResumable {

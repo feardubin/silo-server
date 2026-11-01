@@ -148,6 +148,10 @@ the others. SQL state predicates bind both account and profile. Series and
 season episode queries apply their scope and supported predicates before
 counting and paging; detail and user-state hydration run on the selected page.
 
+`IsFavorite=true` selects favorites, `IsFavorite=false` excludes them, and
+omitting it leaves favorites unfiltered. `Filters=IsFavorite` takes precedence
+over an explicit `IsFavorite=false`, as in Jellyfin.
+
 As in Jellyfin 12, a `/Items` request at the user root (no `ParentId`)
 returns the user's libraries only when it carries no filter. Any parameter that
 sets Jellyfin's `HasFilters` (item types, genres, tags, studios, media types,
@@ -170,7 +174,7 @@ visible episodes of every series, or of the library `ParentId` names, in series
 sort-title order, then season and episode number. `SortName` keeps that order,
 since a Jellyfin episode's sort name is its season and episode number. Episode
 listings here and on series and season parents apply the item-query predicates,
-`IsFavorite=true` included; studios, official ratings and genres are the
+`IsFavorite` included; studios, official ratings and genres are the
 series', and premiere dates are the episodes' air dates.
 
 `/Shows/{id}/Episodes` accepts numeric `Season`, `SeasonId`, `StartItemId`,
@@ -285,7 +289,7 @@ An episode's `ParentThumbImageTag` still names its series' backdrop; the series'
 | `GET /Items/{id}/Ancestors` | Visible episode/season/series/library ancestry. When an item belongs to multiple libraries, chooses its first visible library parent. |
 | `GET /Library/MediaFolders` | The session's visible libraries as a `QueryResult` of `CollectionFolder` items, with the `Id` and `CollectionType` that `/UserViews` reports (`movies`, `tvshows`, …). The synthetic Collections view is not a media folder and is left out. Silo has no hidden media folders, so `isHidden=true` returns an empty list. Jellyfin SDK `getMediaFolders()` discovers libraries here. |
 | `GET /Items/Filters`, `/Items/Filters2` | Visible catalog genre facets; the legacy shape includes years and official ratings. For Movie, Series, Season, or Episode queries, `Filters2` also lists `AudioLanguages` and `SubtitleLanguages` as `{Name: "English (en)", Value: "en"}` pairs sorted by name. |
-| `GET /Items/Counts` | Jellyfin's `ItemCounts` for what the session can see: `MovieCount`, `SeriesCount`, `EpisodeCount`, and `BoxSetCount`, with `ItemCount` their sum (Jellyfin also counts seasons there). `isFavorite=true` counts the profile's favorites; box sets cannot be favorites, so they count zero. Silo serves no music, trailers, books or Live TV, so those counts are zero. A `userId` other than the session's answers 404. |
+| `GET /Items/Counts` | Jellyfin's `ItemCounts` for what the session can see: `MovieCount`, `SeriesCount`, `EpisodeCount`, and `BoxSetCount`, with `ItemCount` their sum (Jellyfin also counts seasons there). `isFavorite=true` counts only the profile's favorites; `isFavorite=false` excludes them, and omitting it applies no favorite filter. Box sets cannot be favorites, so they count zero only with `isFavorite=true`. Silo serves no music, trailers, books or Live TV, so those counts are zero. A `userId` other than the session's answers 404. |
 | `GET /Items/{id}/Collections` | Jellyfin 12 "Included In": visible BoxSets that store the item, sorted by name and paged by `StartIndex`/`Limit`. An item the viewer cannot see returns 404 regardless of membership; visible episodes and any season return an empty result. Smart collections have no stored membership and are not listed. |
 | `GET /Studios` | Visible catalog studios with paging. |
 | `GET /Shows/Upcoming` | Scoped episodes dated from yesterday in UTC onward, with paging. |

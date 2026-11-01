@@ -9,7 +9,7 @@ import (
 )
 
 func TestBrowseUserStateWithoutProfileFailsClosed(t *testing.T) {
-	plan, empty, err := (&BrowseRepository{}).buildBrowsePlan(BrowseFilters{Type: "movie", UserID: 7, IsFavorite: true})
+	plan, empty, err := (&BrowseRepository{}).buildBrowsePlan(BrowseFilters{Type: "movie", UserID: 7, IsFavorite: new(true)})
 	if err != nil || empty {
 		t.Fatalf("build: %v %v", empty, err)
 	}

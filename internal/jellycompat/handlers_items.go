@@ -243,7 +243,7 @@ func (h *ItemsHandler) HandleItems(w http.ResponseWriter, r *http.Request) {
 		// carry no favorite/played state, so those return empty, matching the
 		// pre-existing favorites guard); CollectionFolder means the library
 		// views; anything else (Playlist, MusicAlbum, ...) is empty.
-		hasUserStateFilter := query.isFavorite || query.isResumable || query.isPlayed != nil
+		hasUserStateFilter := query.isFavorite != nil && *query.isFavorite || query.isResumable || query.isPlayed != nil
 		switch {
 		case query.wantsBoxSets && !hasUserStateFilter:
 			h.handleBoxSetsList(w, r, session, query)
@@ -266,7 +266,7 @@ func (h *ItemsHandler) HandleItems(w http.ResponseWriter, r *http.Request) {
 		h.handleBrowseItems(w, r, session, query)
 	case query.searchTerm != "":
 		h.handleSearchItems(w, r, session, query)
-	case query.isFavorite:
+	case query.isFavorite != nil && *query.isFavorite:
 		h.handleFavoriteItems(w, r, session, query)
 	case query.listsUserRootViews():
 		// No ParentId and no filter: return top-level library views.
@@ -1148,16 +1148,19 @@ func (h *ItemsHandler) HandleItemCounts(w http.ResponseWriter, r *http.Request) 
 	if userID := q.Get("userId"); userID != "" && !validatePseudoUser(w, userID, session) {
 		return
 	}
-	isFavorite := parseBool(q.Get("isFavorite"), false)
+	var isFavorite *bool
+	if value, ok := parseOptionalBool(q.Get("isFavorite")); ok {
+		isFavorite = new(value)
+	}
 
 	count := func(itemType string) (int, error) {
 		params := url.Values{}
 		params.Set("type", itemType)
 		params.Set("limit", "1")
 		params.Set("count_only", "true")
-		if isFavorite {
+		if isFavorite != nil {
 			params.Set("compose_state", "true")
-			params.Set("is_favorite", "true")
+			params.Set("is_favorite", strconv.FormatBool(*isFavorite))
 		}
 		result, err := h.content.BrowseItems(r.Context(), session, params)
 		if err != nil {
@@ -1187,7 +1190,7 @@ func (h *ItemsHandler) HandleItemCounts(w http.ResponseWriter, r *http.Request) 
 		counts.EpisodeCount = total
 	}
 	// Favorites cover catalog items only, so no box set is ever a favorite.
-	if h.collections != nil && !isFavorite {
+	if h.collections != nil && (isFavorite == nil || !*isFavorite) {
 		visible, err := h.visibleLibraryIDs(r.Context(), session)
 		if err != nil {
 			writeCompatUpstreamError(w, err)
@@ -1966,7 +1969,7 @@ func (h *ItemsHandler) writeSeasonItemsResponse(w http.ResponseWriter, r *http.R
 		}
 	}
 	seasons = slices.DeleteFunc(seasons, func(season upstreamSeason) bool {
-		if query.isFavorite && !favorites[season.ContentID] {
+		if query.isFavorite != nil && favorites[season.ContentID] != *query.isFavorite {
 			return true
 		}
 		played := season.UserData != nil && season.UserData.Played
@@ -2172,7 +2175,7 @@ func (h *ItemsHandler) episodeBrowseFilters(ctx context.Context, session *Sessio
 // played filters itself unless the profile's state lives in the configured
 // user store; then the episodes are matched against that store in batches.
 func (h *ItemsHandler) browseEpisodes(ctx context.Context, session *Session, repo episodeBrowser, seriesID, seasonID string, seasonNumber *int, startID string, filters catalog.BrowseFilters, access catalog.AccessFilter, includeTotal bool) ([]*models.Episode, int, error) {
-	if h.catalogUserState || (!filters.IsFavorite && filters.IsPlayed == nil && !filters.IsResumable) {
+	if h.catalogUserState || (filters.IsFavorite == nil && filters.IsPlayed == nil && !filters.IsResumable) {
 		return repo.BrowseEpisodes(ctx, seriesID, seasonID, seasonNumber, startID, filters, access, includeTotal)
 	}
 	content, ok := h.content.(interface {
@@ -3136,7 +3139,7 @@ func (h *ItemsHandler) handleSpecificItems(w http.ResponseWriter, r *http.Reques
 	// Jellyfin returns every named item when Limit is absent, so neither path
 	// below applies parseItemsQuery's default page size, which is for item
 	// browsing. The catalog browse still caps a page at compatBrowseMaxLimit.
-	if len(query.specificCollectionIDs) == 0 && !idsRequestCollectionsView(r) && (query.hasIntersectingFilters() || query.hasItemTypeFilter || query.isFavorite || query.isPlayed != nil || query.isResumable || query.searchTerm != "" || query.sortExplicit) {
+	if len(query.specificCollectionIDs) == 0 && !idsRequestCollectionsView(r) && (query.hasIntersectingFilters() || query.hasItemTypeFilter || query.isFavorite != nil || query.isPlayed != nil || query.isResumable || query.searchTerm != "" || query.sortExplicit) {
 		if query.limitDefaulted {
 			query.limit = len(query.specificIDs)
 		}
@@ -4445,7 +4448,7 @@ func (h *ItemsHandler) filteredSpecificMediaIDs(ctx context.Context, session *Se
 	if len(query.specificIDs) == 0 || query.hasItemTypeFilter && len(query.itemTypes) == 0 {
 		return nil, nil
 	}
-	if !query.hasIntersectingFilters() && !query.hasItemTypeFilter && !query.isFavorite && query.isPlayed == nil && !query.isResumable && query.searchTerm == "" {
+	if !query.hasIntersectingFilters() && !query.hasItemTypeFilter && query.isFavorite == nil && query.isPlayed == nil && !query.isResumable && query.searchTerm == "" {
 		return query.specificIDs, nil
 	}
 	selected := query.specificIDs
@@ -4495,7 +4498,7 @@ func matchesSpecificCollection(item baseItemDTO, query itemsQuery) bool {
 	if query.mediaTypesExplicit && !query.mediaTypesSet[strings.ToLower(item.MediaType)] {
 		return false
 	}
-	if query.isFavorite || query.isResumable || query.isPlayed != nil && *query.isPlayed || len(query.genres) > 0 || query.genreName != "" || len(query.years) > 0 || query.personID > 0 {
+	if query.isFavorite != nil && *query.isFavorite || query.isResumable || query.isPlayed != nil && *query.isPlayed || len(query.genres) > 0 || query.genreName != "" || len(query.years) > 0 || query.personID > 0 {
 		return false
 	}
 	if query.requireBackdrop && len(item.BackdropImageTags) == 0 {
