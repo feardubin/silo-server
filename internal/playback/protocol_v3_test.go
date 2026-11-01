@@ -1329,6 +1329,49 @@ func TestVideoEligibleV3DecoderFrameRateHoldsAtItsLargestSize(t *testing.T) {
 	}
 }
 
+// An HEVC source is held to the lowest level its size, frame rate, bitrate and
+// picture buffer fit, never above its tag, so a 4K24 stream tagged 5.2 by its
+// encoder plays on a decoder that reports 5.1, while a stream that needs more,
+// or may, does not.
+func TestVideoEligibleV3HEVCLevelFollowsTheStream(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		level         int
+		decoderLevel  int
+		width, height int
+		frameRate     float64
+		kbps          int
+		want          bool
+	}{
+		{name: "4K24 tagged 5.2", level: 156, decoderLevel: 153, width: 3840, height: 1916, frameRate: 23.976, kbps: 33_200, want: true},
+		// 6.2 lets a 4K picture use 16 buffer slots where 5.1 gives it 6, and
+		// the probe does not report how many the stream uses.
+		{name: "4K24 tagged 6.2 keeps its picture buffer", level: 186, decoderLevel: 153, width: 3840, height: 2160, frameRate: 23.976, kbps: 31_792},
+		{name: "4K24 at the 5.1 Main tier rate", level: 156, decoderLevel: 153, width: 3840, height: 2160, frameRate: 23.976, kbps: 40_000, want: true},
+		{name: "4K24 above the 5.1 Main tier rate", level: 156, decoderLevel: 153, width: 3840, height: 2160, frameRate: 23.976, kbps: 40_001},
+		{name: "4K120 needs 5.2", level: 156, decoderLevel: 153, width: 3840, height: 2160, frameRate: 120, kbps: 30_000},
+		{name: "8K needs 6.0", level: 180, decoderLevel: 153, width: 7680, height: 4320, frameRate: 23.976, kbps: 30_000},
+		// 1080p fits 4.1's rates, but 5.1 gives a 1080p picture 16 buffer
+		// slots where 4.1 gives 6.
+		{name: "1080p tagged 5.1 keeps its picture buffer", level: 153, decoderLevel: 123, width: 1920, height: 1080, frameRate: 23.976, kbps: 10_000},
+	} {
+		source := SourceDescriptorV3{
+			VideoCodec: "hevc", VideoProfile: "main 10", VideoLevel: tc.level, BitDepth: 10,
+			Width: tc.width, Height: tc.height, FrameRate: tc.frameRate, BitrateKbps: tc.kbps,
+		}
+		req := validStartRequestV3()
+		req.Capabilities.CodecsVideo = []string{"hevc"}
+		req.Capabilities.CodecsVideoHardware = []string{"hevc"}
+		req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{
+			Codec: "hevc", Profiles: []string{"main", "main 10"}, Levels: []int{tc.decoderLevel}, BitDepths: []int{8, 10},
+			MaxWidth: 8192, MaxHeight: 4320, MaxBitrateKbps: 300_000, Hardware: true,
+		}}
+		if eligible, _ := videoEligibleV3(source, req); eligible != tc.want {
+			t.Errorf("%s: eligible = %v, want %v", tc.name, eligible, tc.want)
+		}
+	}
+}
+
 // The planner has to reach the same answer as the eligibility check: an exact
 // 4K30 decoder gets the 1080p50 original, and a tested envelope of the same
 // size does not.

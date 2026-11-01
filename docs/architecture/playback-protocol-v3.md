@@ -568,6 +568,19 @@ validate a level-3.0 stream, while a decoder that handles 8- and 10-bit must
 list both — `[10]` alone rejects an 8-bit source. Levels use the integer form
 (4.1 → `41`).
 
+HEVC levels use `general_level_idc`, the level times 30 (5.1 → `153`). An
+HEVC source with a standard tagged level and known size, frame rate, and
+bitrate is compared at the lowest level whose H.265 Annex A limits hold it,
+capped at its tagged level: picture size, luma sample rate, the Main tier
+bitrate against the source's average, and at least as many decoded picture
+buffer slots for its picture size as the tagged level allows. Encoders such as
+x265 tag the level from the VBV ceiling rather than the stream they produce, so
+a 4K24 file averaging 33 Mb/s and tagged 5.2 still validates against a decoder
+that lists `153`. A 4K file tagged 6.x does not: 6.x allows a 4K picture 16
+buffer slots where 5.x allows 6, and the probe does not report how many the
+stream uses. The tagged level must still be known: an unknown level fails a
+bounded `levels` list as above.
+
 **Every validated video route requires complete routing metadata.** Before any
 tier logic runs, the server requires video codec, bit depth, width, height,
 frame rate, and bitrate. Profile and level are decoder bounds instead: an

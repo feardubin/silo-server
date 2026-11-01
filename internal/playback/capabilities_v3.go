@@ -1,6 +1,7 @@
 package playback
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"unicode"
@@ -186,7 +187,7 @@ func videoDecodeTakesSourceV3(capability VideoDecodeCapabilityV3, source SourceD
 		if len(capability.Profiles) > 0 && !videoProfileSupportedV3(source.VideoCodec, source.VideoProfile, capability.Profiles) {
 			return false
 		}
-		if len(capability.Levels) > 0 && (source.VideoLevel <= 0 || !containsAtLeastV3(capability.Levels, source.VideoLevel)) {
+		if len(capability.Levels) > 0 && (source.VideoLevel <= 0 || !containsAtLeastV3(capability.Levels, sourceDecodeLevelV3(source))) {
 			return false
 		}
 	}
@@ -195,6 +196,90 @@ func videoDecodeTakesSourceV3(capability VideoDecodeCapabilityV3, source SourceD
 	}
 	return decoderTakesFrameV3(capability, source.Width, source.Height, source.FrameRate, rateAtMaxSize) &&
 		(capability.MaxBitrateKbps <= 0 || source.BitrateKbps <= capability.MaxBitrateKbps)
+}
+
+// sourceDecodeLevelV3 is the level a decoder must reach to take the source.
+// Encoders often tag HEVC with a higher level than the stream needs (x265
+// derives it from the VBV ceiling, not the bitrate it produced), so an HEVC
+// source with known size, frame rate and bitrate is judged by the lowest level
+// those fit instead, never above its tag. That level must also give the
+// source's picture size as many decoded picture buffer slots as the tag does,
+// because the stream may use them.
+func sourceDecodeLevelV3(source SourceDescriptorV3) int {
+	if !strings.EqualFold(source.VideoCodec, "hevc") || source.Width <= 0 || source.Height <= 0 ||
+		source.FrameRate <= 0 || source.BitrateKbps <= 0 {
+		return source.VideoLevel
+	}
+	tagged, ok := hevcLevelRowV3(source.VideoLevel)
+	if !ok {
+		return source.VideoLevel
+	}
+	lumaPs := source.Width * source.Height
+	lumaSr := int64(math.Ceil(float64(lumaPs) * source.FrameRate))
+	taggedDpb := hevcMaxDpbSizeV3(lumaPs, tagged.maxLumaPs)
+	for _, level := range hevcLevelsV3 {
+		if level.idc >= source.VideoLevel {
+			break
+		}
+		maxDimension := int(math.Sqrt(float64(level.maxLumaPs) * 8))
+		if lumaPs <= level.maxLumaPs && source.Width <= maxDimension && source.Height <= maxDimension &&
+			lumaSr <= level.maxLumaSr && source.BitrateKbps <= level.maxMainTierKb &&
+			hevcMaxDpbSizeV3(lumaPs, level.maxLumaPs) >= taggedDpb {
+			return level.idc
+		}
+	}
+	return source.VideoLevel
+}
+
+// hevcLevelV3 holds one level's H.265 Annex A limits, keyed by
+// general_level_idc (level x 30, 153 for 5.1). The bitrate is the Main tier
+// ceiling for the Main and Main 10 profiles, the lower of the two tiers,
+// compared against the source's average rate.
+type hevcLevelV3 struct {
+	idc           int
+	maxLumaPs     int
+	maxLumaSr     int64
+	maxMainTierKb int
+}
+
+var hevcLevelsV3 = []hevcLevelV3{
+	{30, 36_864, 552_960, 128},
+	{60, 122_880, 3_686_400, 1_500},
+	{63, 245_760, 7_372_800, 3_000},
+	{90, 552_960, 16_588_800, 6_000},
+	{93, 983_040, 33_177_600, 10_000},
+	{120, 2_228_224, 66_846_720, 12_000},
+	{123, 2_228_224, 133_693_440, 20_000},
+	{150, 8_912_896, 267_386_880, 25_000},
+	{153, 8_912_896, 534_773_760, 40_000},
+	{156, 8_912_896, 1_069_547_520, 60_000},
+	{180, 35_651_584, 1_069_547_520, 60_000},
+	{183, 35_651_584, 2_139_095_040, 120_000},
+	{186, 35_651_584, 4_278_190_080, 240_000},
+}
+
+func hevcLevelRowV3(idc int) (hevcLevelV3, bool) {
+	for _, level := range hevcLevelsV3 {
+		if level.idc == idc {
+			return level, true
+		}
+	}
+	return hevcLevelV3{}, false
+}
+
+// hevcMaxDpbSizeV3 is MaxDpbSize from H.265 A.4.2: a level's six-picture
+// buffer grows, up to 16, as the picture shrinks relative to MaxLumaPs.
+func hevcMaxDpbSizeV3(lumaPs, maxLumaPs int) int {
+	switch {
+	case lumaPs <= maxLumaPs>>2:
+		return 16
+	case lumaPs <= maxLumaPs>>1:
+		return 12
+	case lumaPs <= (3*maxLumaPs)>>2:
+		return 8
+	default:
+		return 6
+	}
 }
 
 // maxTradedFrameRateV3 is the highest source frame rate a copy route admits
